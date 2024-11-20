@@ -17,8 +17,8 @@ cert1 = get_cert("tls-cert.pem")
 key1 = get_cert("tls-key.pem")
 keycert1 = get_cert("tls-key-cert.pem")
 
-# Note this cipher uses RSA auth as this matches our test certs
-FORCED_CIPHER = "ECDHE-RSA-AES128-GCM-SHA256"
+# Note this cipher uses ECDSA auth as this matches our test certs
+FORCED_CIPHER = "ECDHE-ECDSA-AES128-GCM-SHA256"
 
 TLS_13_CIPHERS = [
     "TLS_AES_128_GCM_SHA256",

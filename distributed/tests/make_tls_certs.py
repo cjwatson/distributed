@@ -6,9 +6,10 @@ Code heavily borrowed from Lib/tests/make_ssl_certs.py in CPython.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import tempfile
+
+import trustme
 
 req_template = """
     [req]
@@ -132,67 +133,16 @@ def make_cert_key(hostname, sign=False):
             os.remove(name)
 
 
-TMP_CADIR = "cadir"
-
-
-def unmake_ca():
-    shutil.rmtree(TMP_CADIR)
-
-
-def make_ca():
-    os.mkdir(TMP_CADIR)
-    with open(os.path.join("cadir", "index.txt"), "a+") as f:
-        pass  # empty file
-    # with open(os.path.join('cadir','crl.txt'),'a+') as f:
-    # f.write("00")
-    with open(os.path.join("cadir", "index.txt.attr"), "w+") as f:
-        f.write("unique_subject = no")
-
-    with tempfile.NamedTemporaryFile("w") as t:
-        t.write(req_template.format(hostname="our-ca-server"))
-        t.flush()
-        with tempfile.NamedTemporaryFile() as f:
-            args = [
-                "req",
-                "-new",
-                "-days",
-                "365242",
-                "-extensions",
-                "v3_ca",
-                "-nodes",
-                "-newkey",
-                "rsa:2048",
-                "-keyout",
-                "tls-ca-key.pem",
-                "-out",
-                f.name,
-                "-subj",
-                "/C=XY/L=Dask-distributed/O=Dask CA/CN=our-ca-server",
-            ]
-            subprocess.check_call(["openssl"] + args)
-            args = [
-                "ca",
-                "-config",
-                t.name,
-                "-create_serial",
-                "-out",
-                "tls-ca-cert.pem",
-                "-batch",
-                "-outdir",
-                TMP_CADIR,
-                "-keyfile",
-                "tls-ca-key.pem",
-                "-days",
-                "365242",
-                "-selfsign",
-                "-extensions",
-                "v3_ca",
-                "-infiles",
-                f.name,
-            ]
-            subprocess.check_call(["openssl"] + args)
-            # args = ['ca', '-config', t.name, '-gencrl', '-out', 'revocation.crl']
-            # subprocess.check_call(['openssl'] + args)
+def write_cert_text_and_blob(
+    cert: trustme.Blob, path: str | os.PathLike[str], append: bool = False
+) -> None:
+    with open(path, "ab" if append else "wb") as f:
+        subprocess.run(
+            ["openssl", "x509", "-text"],
+            input=cert.bytes(),
+            stdout=f,
+            check=True,
+        )
 
 
 if __name__ == "__main__":
@@ -204,20 +154,15 @@ if __name__ == "__main__":
         f.write(key)
 
     # For certificate matching tests
-    make_ca()
-    with open("tls-ca-cert.pem") as f:
-        ca_cert = f.read()
+    ca = trustme.CA(organization_name="Dask CA")
+    write_cert_text_and_blob(ca.cert_pem, "tls-ca-cert.pem")
 
-    cert, key = make_cert_key("localhost", sign=True)
-    with open("tls-cert.pem", "w") as f:
-        f.write(cert)
-    with open("tls-cert-chain.pem", "w") as f:
-        f.write(cert)
-        f.write(ca_cert)
-    with open("tls-key.pem", "w") as f:
-        f.write(key)
-    with open("tls-key-cert.pem", "w") as f:
-        f.write(key)
-        f.write(cert)
-
-    unmake_ca()
+    child_ca = ca.create_child_ca()
+    cert = child_ca.issue_cert("localhost")
+    write_cert_text_and_blob(cert.cert_chain_pems[0], "tls-cert.pem")
+    write_cert_text_and_blob(cert.cert_chain_pems[0], "tls-cert-chain.pem")
+    for blob in cert.cert_chain_pems[1:]:
+        write_cert_text_and_blob(blob, "tls-cert-chain.pem", append=True)
+    cert.private_key_pem.write_to_path("tls-key.pem")
+    cert.private_key_pem.write_to_path("tls-key-cert.pem")
+    write_cert_text_and_blob(cert.cert_chain_pems[0], "tls-key-cert.pem", append=True)
